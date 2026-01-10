@@ -21,8 +21,16 @@ from telegram.ext import (
 load_dotenv()
 
 TOKEN = os.getenv("BOT_TOKEN")
-ADMIN_ID = os.getenv("ADMIN_ID")
+ADMIN_ID = int(os.getenv("ADMIN_ID", "0"))
 CHANNEL_ID = os.getenv("CHANNEL_ID", "-1003301486148")
+
+if not TOKEN:
+    raise RuntimeError("❌ BOT_TOKEN tidak terbaca dari environment")
+
+if ADMIN_ID == 0:
+    raise RuntimeError("❌ ADMIN_ID tidak terbaca dari environment")
+
+ADMIN_IDS = [ADMIN_ID]
 
 if not TOKEN:
     raise RuntimeError("❌ BOT_TOKEN tidak terbaca dari environment")
