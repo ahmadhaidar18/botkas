@@ -1,16 +1,38 @@
+from dotenv import load_dotenv
 import os
-from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
-from telegram.ext import (
-    ApplicationBuilder, CommandHandler, CallbackQueryHandler,
-    MessageHandler, ContextTypes, filters
-)
 import sqlite3
 from datetime import datetime
 
-# ================= CONFIG =================
-TOKEN = os.getenv ("8598378490:AAEPnPYSqMFI6lJqUEGEQo93aKLduk2ARvo")
-ADMIN_IDS = [6484363998]
-CHANNEL_ID = "-1003301486148"
+from telegram import (
+    Update,
+    InlineKeyboardButton,
+    InlineKeyboardMarkup
+)
+from telegram.ext import (
+    ApplicationBuilder,
+    CommandHandler,
+    CallbackQueryHandler,
+    MessageHandler,
+    ContextTypes,
+    filters
+)
+
+# ================= LOAD ENV =================
+load_dotenv()
+
+TOKEN = os.getenv("BOT_TOKEN")
+ADMIN_ID = os.getenv("ADMIN_ID")
+CHANNEL_ID = os.getenv("CHANNEL_ID", "-1003301486148")
+
+if not TOKEN:
+    raise RuntimeError("❌ BOT_TOKEN tidak terbaca dari environment")
+
+if not ADMIN_ID:
+    raise RuntimeError("❌ ADMIN_ID tidak terbaca dari environment")
+
+ADMIN_IDS = [int(ADMIN_ID)]
+
+print("DEBUG TOKEN:", TOKEN)
 
 # ================= DATABASE =================
 conn = sqlite3.connect("kas.db", check_same_thread=False)
@@ -28,30 +50,28 @@ CREATE TABLE IF NOT EXISTS transaksi (
 conn.commit()
 
 # ================= UTIL =================
-def rupiah(n):
+def rupiah(n: int) -> str:
     return f"{n:,}".replace(",", ".")
 
-def get_saldo():
+def get_saldo() -> int:
     cur.execute("""
-        SELECT SUM(CASE WHEN jenis='MASUK' THEN jumlah ELSE -jumlah END)
+        SELECT SUM(
+            CASE WHEN jenis='MASUK' THEN jumlah ELSE -jumlah END
+        )
         FROM transaksi
     """)
     r = cur.fetchone()[0]
     return r if r else 0
 
-def is_admin(update: Update):
+def is_admin(update: Update) -> bool:
     return update.effective_user.id in ADMIN_IDS
 
-async def kirim_ke_channel(context, text):
-    try:
-        await context.bot.send_message(
-            chat_id=CHANNEL_ID,
-            text=text,
-            parse_mode="Markdown"
-        )
-        print("✅ Pesan terkirim ke channel")
-    except Exception as e:
-        print("❌ Gagal kirim ke channel:", e)
+async def kirim_ke_channel(context, text: str):
+    await context.bot.send_message(
+        chat_id=CHANNEL_ID,
+        text=text,
+        parse_mode="Markdown"
+    )
 
 # ================= KEYBOARD =================
 def menu_keyboard():
@@ -71,20 +91,8 @@ def back_keyboard():
         [InlineKeyboardButton("⬅️ Kembali", callback_data="MENU")]
     ])
 
-# ================= START =================
-async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if not is_admin(update):
-        await update.message.reply_text("⛔ Akses ditolak.")
-        return
-
-    await update.message.reply_text(
-        "🤖 *BOT KAS BENDAHARA*\n\nLogin berhasil ✅",
-        parse_mode="Markdown",
-        reply_markup=menu_keyboard()
-    )
-
-# ================= RIWAYAT CHANNEL (TABEL) =================
-def format_riwayat_channel_tabel():
+# ================= FORMAT RIWAYAT =================
+def format_riwayat_tabel():
     cur.execute("SELECT * FROM transaksi ORDER BY id")
     rows = cur.fetchall()
 
@@ -120,6 +128,17 @@ def format_riwayat_channel_tabel():
     text += "```"
     return text
 
+# ================= START =================
+async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not is_admin(update):
+        await update.message.reply_text("⛔ Akses ditolak")
+        return
+
+    await update.message.reply_text(
+        "🤖 *BOT KAS BENDAHARA*\n\nLogin berhasil ✅",
+        parse_mode="Markdown",
+        reply_markup=menu_keyboard()
+    )
 
 # ================= CALLBACK =================
 async def menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -148,14 +167,10 @@ async def menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     elif data == "SALDO":
         saldo = get_saldo()
-
-        # ke channel
         await kirim_ke_channel(
             context,
             f"💰 *SALDO KAS*\n\nRp {rupiah(saldo)}"
         )
-
-        # ke admin
         await q.message.reply_text(
             f"💰 *SALDO SAAT INI*\nRp {rupiah(saldo)}\n\n📢 Dikirim ke channel",
             parse_mode="Markdown",
@@ -163,86 +178,25 @@ async def menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
         )
 
     elif data == "RIWAYAT":
-        # ke channel (tabel)
-        await kirim_ke_channel(
-            context,
-            format_riwayat_channel_tabel()
-        )
+        text = format_riwayat_tabel()
 
-        # ke admin (lengkap + tombol)
-        await tampil_riwayat_admin(q.message)
-
-    elif data.startswith("edit_"):
-        context.user_data["edit_id"] = data.split("_")[1]
+        await kirim_ke_channel(context, text)
         await q.message.reply_text(
-            "✏️ *Yakin ingin edit transaksi ini?*",
+            text,
             parse_mode="Markdown",
-            reply_markup=InlineKeyboardMarkup([
-                [
-                    InlineKeyboardButton("✅ Ya", callback_data="EDIT_YA"),
-                    InlineKeyboardButton("❌ Tidak", callback_data="MENU")
-                ]
-            ])
+            reply_markup=back_keyboard()
         )
-
-    elif data == "EDIT_YA":
-        await q.message.reply_text(
-            "Ketik ulang:\n`jumlah keterangan`",
-            parse_mode="Markdown"
-        )
-
-    elif data.startswith("hapus_"):
-        context.user_data["hapus_id"] = data.split("_")[1]
-        await q.message.reply_text(
-            "🗑️ *Yakin ingin menghapus transaksi ini?*",
-            parse_mode="Markdown",
-            reply_markup=InlineKeyboardMarkup([
-                [
-                    InlineKeyboardButton("✅ Ya", callback_data="HAPUS_YA"),
-                    InlineKeyboardButton("❌ Tidak", callback_data="MENU")
-                ]
-            ])
-        )
-
-    elif data == "HAPUS_YA":
-        id_trx = context.user_data.pop("hapus_id", None)
-        if id_trx:
-            cur.execute("DELETE FROM transaksi WHERE id=?", (id_trx,))
-            conn.commit()
-            await q.message.reply_text("🗑️ Transaksi dihapus")
-            await tampil_riwayat_admin(q.message)
 
 # ================= INPUT =================
 async def input_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not is_admin(update):
         return
 
-    text = update.message.text
-
-    if "edit_id" in context.user_data:
-        try:
-            jml, ket = text.split(" ", 1)
-            jml = int(jml)
-        except:
-            await update.message.reply_text("❌ Format salah")
-            return
-
-        id_trx = context.user_data.pop("edit_id")
-        cur.execute(
-            "UPDATE transaksi SET jumlah=?, keterangan=? WHERE id=?",
-            (jml, ket, id_trx)
-        )
-        conn.commit()
-
-        await update.message.reply_text("✏️ Transaksi berhasil diedit")
-        await tampil_riwayat_admin(update.message)
-        return
-
     if "jenis" not in context.user_data:
         return
 
     try:
-        jml, ket = text.split(" ", 1)
+        jml, ket = update.message.text.split(" ", 1)
         jml = int(jml)
     except:
         await update.message.reply_text("❌ Format salah")
@@ -257,60 +211,18 @@ async def input_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
     )
     conn.commit()
 
-    await update.message.reply_text("✅ Transaksi tersimpan", reply_markup=menu_keyboard())
-
-# ================= RIWAYAT ADMIN =================
-async def tampil_riwayat_admin(msg):
-    cur.execute("SELECT * FROM transaksi ORDER BY id")
-    rows = cur.fetchall()
-
-    saldo = 0
-    text = "📒 *BUKU KAS UMUM*\n\n```"
-    text += "No Tgl        Ket            Debet            Kredit           Saldo\n"
-    text += "--------------------------------------------------------------------\n"
-
-    buttons = []
-
-    for i, r in enumerate(rows, 1):
-        id, tgl, jenis, jml, ket = r
-
-        if jenis == "MASUK":
-            saldo += jml
-            d = f"🟢{rupiah(jml)}"
-            k = "-"
-        else:
-            saldo -= jml
-            d = "-"
-            k = f"🔴{rupiah(jml)}"
-
-        text += (
-            f"{i:<3}"
-            f"{tgl:<11}"
-            f"{ket[:14]:<14}"
-            f"{d:<16}"
-            f"{k:<16}"
-            f"{rupiah(saldo)}\n"
-        )
-
-        buttons.append([
-            InlineKeyboardButton("✏️ Edit", callback_data=f"edit_{id}"),
-            InlineKeyboardButton("🗑️ Hapus", callback_data=f"hapus_{id}")
-        ])
-
-    text += "```"
-    buttons.append([InlineKeyboardButton("⬅️ Menu", callback_data="MENU")])
-
-    await msg.reply_text(
-        text,
-        parse_mode="Markdown",
-        reply_markup=InlineKeyboardMarkup(buttons)
+    await update.message.reply_text(
+        "✅ Transaksi tersimpan",
+        reply_markup=menu_keyboard()
     )
 
 # ================= MAIN =================
 if __name__ == "__main__":
     print("🤖 Bot kas bendahara berjalan...")
     app = ApplicationBuilder().token(TOKEN).build()
+
     app.add_handler(CommandHandler("start", start))
     app.add_handler(CallbackQueryHandler(menu))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, input_text))
+
     app.run_polling()
